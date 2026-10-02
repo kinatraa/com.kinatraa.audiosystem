@@ -2,28 +2,36 @@
 
 ## 1. Install
 
-Use the Package Manager git URL `https://github.com/kinatraa/com.kinatraa.audiosystem.git#1.0.0`, or add the repository as a submodule at `Packages/com.kinatraa.audiosystem`.
+Use the Package Manager git URL `https://github.com/kinatraa/com.kinatraa.audiosystem.git#1.1.0`, or add the repository as a submodule at `Packages/com.kinatraa.audiosystem`.
 
-## 2. Create the config and a library
+## 2. Open the Library window
 
-Run **Tools ▸ kinatraa ▸ Audio ▸ Create Default Config**. It creates:
+Open **Tools ▸ kinatraa ▸ Audio ▸ Library Window**. The first time, it offers **Create Audio Setup**, which creates:
 
 - `Assets/Resources/kinatraaAudioConfig.asset`, which is loaded automatically before the first scene.
-- `Assets/Audio/AudioLibrary.asset`, which is already referenced by the config.
+- `Assets/Audio/AudioLibrary.asset`, which is already registered in the config.
 
-Without a config the system still starts with built-in defaults, but no library is registered until you call `Audio.RegisterLibrary`.
+More libraries (for example one per level) come from the window's **Libraries ▾ ▸ New Library...**, which registers the new library in the config automatically. A library that is not registered shows a warning with a **Register in Config** button.
 
 ## 3. Add cues
 
-Open the library (select it, or use **Tools ▸ kinatraa ▸ Audio ▸ Library Window**) and drop AudioClips or folders on the drop area.
+Drag clips or whole folders onto one of the two drop zones:
 
-- Ids are snake_case versions of the file names: `UI Click.wav` becomes `ui_click`.
-- With *Group numbered variations* enabled, `footstep_01` and `footstep_02` become one cue `footstep` with two clips.
-- Expand a cue to set its channel, volume and pitch ranges, loop, 3D settings, cooldown, instance limit, delay, fades and tags.
-- **Play** previews a cue in the editor. Red rows have an empty or duplicate id. *(!)* marks a cue with no clips or a missing clip.
-- Select several cues with the checkboxes to bulk-edit channel, volume, pitch and tags, or to delete them.
+| Zone | Result |
+|---|---|
+| **SFX** | One cue per file, on the SFX channel. With *Combine numbered SFX* on, `footstep_01` and `footstep_02` become one cue `footstep` with two random variations. |
+| **Music** | One looping 2D cue per file on the Music channel. Numbered files stay separate, so `BGM_01` and `BGM_02` become `bgm_01` and `bgm_02`. |
 
-Music cues are always routed to the **Music** channel by `Audio.PlayMusic`, whatever channel the cue uses.
+Ids are snake_case versions of the file names (`UI Click.wav` becomes `ui_click`). Dropping a clip whose cue already exists adds it to that cue.
+
+Working with the list:
+
+- Click a cue to edit it in the detail panel. The common settings (clips, channel, volume, pitch, loop) are always visible. **3D Sound**, **Limits**, **Timing** and **Tags** are collapsed sections.
+- **▶** previews a cue. Red ids are empty or duplicated, and a warning icon marks a cue with no clips or a missing clip.
+- Right-click a cue to duplicate, delete or move it. The toolbar's search box also matches tags, and the channel popup filters the list.
+- **More ▾** holds Sort by Id, Generate Audio Ids, Validate Setup and Select Config.
+
+Music cues are always routed to the **Music** channel by `Audio.PlayMusic`, whatever channel the cue uses. To rotate tracks, add them to a playlist (the **Playlists** section under the cue editor) and call `Audio.PlayPlaylist`.
 
 ## 4. Play from code
 

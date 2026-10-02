@@ -25,6 +25,8 @@ namespace kinatraa.AudioSystem.Editor
         private static List<CueInfo> cues;
         private static HashSet<string> cueIds;
         private static string[] channelNames;
+        private static AudioSystemConfig config;
+        private static bool configSearched;
         private static AudioSource previewSource;
         private static object previewOwner;
 
@@ -43,6 +45,8 @@ namespace kinatraa.AudioSystem.Editor
             cues = null;
             cueIds = null;
             channelNames = null;
+            config = null;
+            configSearched = false;
         }
 
         internal static List<AudioLibrary> Libraries
@@ -102,10 +106,12 @@ namespace kinatraa.AudioSystem.Editor
             return null;
         }
 
-        /// <summary>The config at Resources/kinatraaAudioConfig, else the first config found.</summary>
+        /// <summary>The config at Resources/kinatraaAudioConfig, else the first config found (cached until <see cref="Invalidate"/>).</summary>
         internal static AudioSystemConfig FindConfig()
         {
-            var config = AssetDatabase.LoadAssetAtPath<AudioSystemConfig>(DefaultConfigPath);
+            if (config != null || configSearched) return config;
+            configSearched = true;
+            config = AssetDatabase.LoadAssetAtPath<AudioSystemConfig>(DefaultConfigPath);
             if (config != null) return config;
             var paths = new List<string>();
             foreach (string guid in AssetDatabase.FindAssets("t:AudioSystemConfig")) paths.Add(AssetDatabase.GUIDToAssetPath(guid));
@@ -114,10 +120,12 @@ namespace kinatraa.AudioSystem.Editor
             {
                 if (path.EndsWith("/Resources/" + AudioSystemConfig.ResourcesPath + ".asset", StringComparison.Ordinal))
                 {
-                    return AssetDatabase.LoadAssetAtPath<AudioSystemConfig>(path);
+                    config = AssetDatabase.LoadAssetAtPath<AudioSystemConfig>(path);
+                    return config;
                 }
             }
-            return paths.Count > 0 ? AssetDatabase.LoadAssetAtPath<AudioSystemConfig>(paths[0]) : null;
+            config = paths.Count > 0 ? AssetDatabase.LoadAssetAtPath<AudioSystemConfig>(paths[0]) : null;
+            return config;
         }
 
         /// <summary>Channel names from the config followed by any missing built-in channel.</summary>

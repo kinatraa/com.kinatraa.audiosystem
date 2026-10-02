@@ -7,30 +7,35 @@ using UnityEngine;
 namespace kinatraa.AudioSystem.Editor
 {
     /// <summary>
-    /// Library inspector: search, channel/tag filters, drag-and-drop cue creation, bulk edit, preview,
-    /// duplicate-id and missing-clip detection, sorting and reordering.
+    /// Library editor: a compact cue list (search, channel filter, preview) plus a detail panel for the selected cue.
+    /// SFX and Music drop zones create cues from clips or folders. Also hosted by <see cref="AudioLibraryWindow"/>.
     /// </summary>
     [CustomEditor(typeof(AudioLibrary))]
     internal sealed class AudioLibraryEditor : UnityEditor.Editor
     {
         private const string GroupPrefKey = "kinatraa.audio.groupVariations";
-        private const string AllLabel = "All";
-        private static readonly Color DuplicateColor = new Color(1f, 0.5f, 0.5f);
+        private const string PlaylistsFoldoutKey = "kinatraa.audio.foldout.playlists";
+        private const string AllChannels = "All";
+        private const float RowHeight = 20f;
+        private static readonly Color SelectedColor = new Color(0.24f, 0.49f, 0.91f, 0.35f);
 
         private SerializedProperty cuesProp;
         private SerializedProperty playlistsProp;
         private SearchField searchField;
         private string search = "";
-        private string channelFilter = AllLabel;
-        private string tagFilter = AllLabel;
-        private readonly HashSet<int> selected = new HashSet<int>();
-        private readonly List<int> visible = new List<int>();
-        private string bulkChannel = AudioChannel.SfxName;
-        private Vector2 bulkVolume = Vector2.one;
-        private Vector2 bulkPitch = Vector2.one;
-        private string bulkTag = "";
+        private string channelFilter = AllChannels;
+        private int selected = -1;
+        private int shownInDetail = -1;
+        private Vector2 listScroll;
+        private Vector2 detailScroll;
         private Action pending;
+        private readonly Dictionary<string, int> idCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         private GUIStyle dropStyle;
+        private GUIStyle errorLabel;
+        private GUIStyle channelLabel;
+        private GUIContent playIcon;
+        private GUIContent stopIcon;
+        private GUIContent warnIcon;
 
         private AudioLibrary Library
         {
@@ -46,40 +51,52 @@ namespace kinatraa.AudioSystem.Editor
 
         public override void OnInspectorGUI()
         {
+            DrawLayout(false);
+        }
+
+        /// <summary>Draws the editor. Wide = list and detail side by side (window), otherwise stacked (inspector).</summary>
+        internal void DrawLayout(bool wide)
+        {
+            InitStyles();
             serializedObject.Update();
             AudioLibrary lib = Library;
+            CountIds(lib);
 
-            DrawToolbar(lib);
-            DrawDropArea();
+            DrawRegistration(lib);
+            DrawToolbar(lib, wide);
+            DrawDropZones();
 
-            var localCounts = new Dictionary<string, int>(StringComparer.Ordinal);
-            foreach (AudioCue cue in lib.cues)
+            if (wide)
             {
-                if (cue == null) continue;
-                int n;
-                localCounts.TryGetValue(cue.id ?? "", out n);
-                localCounts[cue.id ?? ""] = n + 1;
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.BeginVertical(GUILayout.Width(300f));
+                listScroll = EditorGUILayout.BeginScrollView(listScroll, GUILayout.ExpandHeight(true));
+                DrawList(lib);
+                EditorGUILayout.EndScrollView();
+                EditorGUILayout.EndVertical();
+                EditorGUILayout.BeginVertical();
+                detailScroll = EditorGUILayout.BeginScrollView(detailScroll);
+                DrawDetail(lib);
+                DrawPlaylists();
+                EditorGUILayout.EndScrollView();
+                EditorGUILayout.EndVertical();
+                EditorGUILayout.EndHorizontal();
             }
-            DrawSummary(lib, localCounts);
-
-            visible.Clear();
-            for (int i = 0; i < lib.cues.Count; i++)
+            else
             {
-                if (Matches(lib.cues[i])) visible.Add(i);
+                int rows = Mathf.Max(1, CountVisible(lib));
+                listScroll = EditorGUILayout.BeginScrollView(listScroll, GUILayout.Height(Mathf.Min(rows * RowHeight + 6f, 260f)));
+                DrawList(lib);
+                EditorGUILayout.EndScrollView();
+                DrawDetail(lib);
+                DrawPlaylists();
             }
-            if (selected.Count > 0) DrawBulkBar();
 
-            for (int v = 0; v < visible.Count; v++) DrawCue(lib, visible[v], localCounts);
-
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("Add Cue")) pending = () => Mutate("Add Audio Cue", l => l.cues.Add(new AudioCue { id = UniqueId(l, "new_cue") }));
-            if (GUILayout.Button("Generate Ids")) pending = () => AudioIdsGenerator.GenerateAndReport();
-            EditorGUILayout.EndHorizontal();
-
-            EditorGUILayout.Space();
-            EditorGUILayout.PropertyField(playlistsProp, true);
-
-            if (serializedObject.ApplyModifiedProperties()) AudioEditorUtility.Invalidate();
+            if (serializedObject.ApplyModifiedProperties())
+            {
+                AudioEditorUtility.Invalidate();
+                Audio.NotifyLibraryChanged(lib);
+            }
             if (pending != null)
             {
                 Action action = pending;
@@ -88,96 +105,121 @@ namespace kinatraa.AudioSystem.Editor
             }
         }
 
-        // ---------------------------------------------------------------- toolbar & filters
+        private void InitStyles()
+        {
+            if (dropStyle != null) return;
+            dropStyle = new GUIStyle(EditorStyles.helpBox) { alignment = TextAnchor.MiddleCenter, wordWrap = true };
+            errorLabel = new GUIStyle(EditorStyles.label);
+            errorLabel.normal.textColor = new Color(0.9f, 0.3f, 0.3f);
+            channelLabel = new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleRight };
+            playIcon = new GUIContent(EditorGUIUtility.IconContent("PlayButton").image, "Preview");
+            stopIcon = new GUIContent(EditorGUIUtility.IconContent("PlayButton On").image, "Stop preview");
+            warnIcon = new GUIContent(EditorGUIUtility.IconContent("console.warnicon.sml").image, "No clips or a missing clip");
+        }
 
-        private void DrawToolbar(AudioLibrary lib)
+        private void CountIds(AudioLibrary lib)
+        {
+            idCounts.Clear();
+            foreach (AudioCue cue in lib.cues)
+            {
+                if (cue == null) continue;
+                int n;
+                idCounts.TryGetValue(cue.id ?? "", out n);
+                idCounts[cue.id ?? ""] = n + 1;
+            }
+        }
+
+        private bool IsBadId(string id)
+        {
+            int n;
+            return string.IsNullOrEmpty(id) || (idCounts.TryGetValue(id, out n) && n > 1);
+        }
+
+        // ---------------------------------------------------------------- header
+
+        private void DrawRegistration(AudioLibrary lib)
+        {
+            AudioSystemConfig config = AudioEditorUtility.FindConfig();
+            if (config == null)
+            {
+                EditorGUILayout.HelpBox("There is no audio config yet, so this library is not loaded when the game starts.", MessageType.Warning);
+                if (GUILayout.Button("Create Config With This Library")) pending = () => AudioSetup.Register(lib);
+            }
+            else if (!config.libraries.Contains(lib))
+            {
+                EditorGUILayout.HelpBox("This library is not in " + config.name + ", so its cues won't play unless you call Audio.RegisterLibrary.", MessageType.Warning);
+                if (GUILayout.Button("Register in Config")) pending = () => AudioSetup.Register(lib);
+            }
+        }
+
+        private void DrawToolbar(AudioLibrary lib, bool wide)
         {
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
             search = searchField.OnToolbarGUI(search);
 
-            var channels = new List<string> { AllLabel };
+            var channels = new List<string> { AllChannels };
             channels.AddRange(AudioEditorUtility.ChannelNames);
-            channelFilter = Popup(channelFilter, channels, 90f);
+            int index = Mathf.Max(0, channels.IndexOf(channelFilter));
+            index = EditorGUILayout.Popup(index, channels.ToArray(), EditorStyles.toolbarPopup, GUILayout.Width(80f));
+            channelFilter = channels[index];
 
-            var tags = new List<string> { AllLabel };
-            foreach (AudioCue cue in lib.cues)
+            if (GUILayout.Button(new GUIContent("Add Cue", "Add an empty cue"), EditorStyles.toolbarButton, GUILayout.Width(60f)))
             {
-                if (cue == null) continue;
-                foreach (string tag in cue.tags)
+                pending = () => Mutate("Add Audio Cue", l =>
                 {
-                    if (!string.IsNullOrEmpty(tag) && !tags.Contains(tag)) tags.Add(tag);
-                }
+                    l.cues.Add(new AudioCue { id = UniqueId(l, "new_cue") });
+                    return l.cues.Count - 1;
+                });
             }
-            tagFilter = Popup(tagFilter, tags, 90f);
 
-            if (GUILayout.Button(new GUIContent("Sort", "Sort cues by id"), EditorStyles.toolbarButton, GUILayout.Width(40f)))
+            if (GUILayout.Button("More", EditorStyles.toolbarDropDown, GUILayout.Width(50f)))
             {
-                pending = () => Mutate("Sort Audio Cues", l => l.cues.Sort((a, b) => string.CompareOrdinal(a != null ? a.id : "", b != null ? b.id : "")));
+                var menu = new GenericMenu();
+                menu.AddItem(new GUIContent("Sort Cues by Id"), false, () => Mutate("Sort Audio Cues", l =>
+                {
+                    l.cues.Sort((a, b) => string.CompareOrdinal(a != null ? a.id : "", b != null ? b.id : ""));
+                    return -1;
+                }));
+                menu.AddItem(new GUIContent("Generate Audio Ids"), false, AudioIdsGenerator.GenerateAndReport);
+                menu.AddItem(new GUIContent("Validate Setup"), false, AudioSetup.ValidateSetup);
+                menu.AddSeparator("");
+                if (!wide) menu.AddItem(new GUIContent("Open in Library Window"), false, () => AudioLibraryWindow.Open(lib));
+                menu.AddItem(new GUIContent("Select Config"), false, () =>
+                {
+                    AudioSystemConfig config = AudioEditorUtility.FindConfig();
+                    if (config != null) Selection.activeObject = config;
+                });
+                menu.ShowAsContext();
             }
             EditorGUILayout.EndHorizontal();
         }
 
-        private static string Popup(string current, List<string> options, float width)
-        {
-            int index = Mathf.Max(0, options.IndexOf(current));
-            index = EditorGUILayout.Popup(index, options.ToArray(), EditorStyles.toolbarPopup, GUILayout.Width(width));
-            return options[index];
-        }
+        // ---------------------------------------------------------------- drop zones
 
-        private bool Matches(AudioCue cue)
+        private void DrawDropZones()
         {
-            if (cue == null) return true;
-            if (channelFilter != AllLabel && cue.channel.Name != channelFilter) return false;
-            if (tagFilter != AllLabel && !cue.tags.Contains(tagFilter)) return false;
-            if (string.IsNullOrEmpty(search)) return true;
-            if (cue.id != null && cue.id.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            foreach (string tag in cue.tags)
-            {
-                if (tag != null && tag.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            }
-            return false;
-        }
+            Rect area = GUILayoutUtility.GetRect(0f, 38f, GUILayout.ExpandWidth(true));
+            var sfx = new Rect(area.x, area.y, area.width * 0.5f - 2f, area.height);
+            var music = new Rect(sfx.xMax + 4f, area.y, area.width - sfx.width - 4f, area.height);
+            DropZone(sfx, "Drop SFX clips or folders", false);
+            DropZone(music, "Drop Music clips or folders\n(one looping cue per file)", true);
 
-        private void DrawSummary(AudioLibrary lib, Dictionary<string, int> localCounts)
-        {
-            int duplicates = 0, missing = 0;
-            foreach (KeyValuePair<string, int> pair in localCounts)
-            {
-                if (pair.Value > 1 || pair.Key.Length == 0) duplicates += pair.Value;
-            }
-            foreach (AudioCue cue in lib.cues)
-            {
-                if (cue != null && HasMissingClips(cue)) missing++;
-            }
-            if (duplicates > 0) EditorGUILayout.HelpBox(duplicates + " cue(s) have an empty or duplicate id.", MessageType.Error);
-            if (missing > 0) EditorGUILayout.HelpBox(missing + " cue(s) have no clips or a missing clip.", MessageType.Warning);
-        }
-
-        private static bool HasMissingClips(AudioCue cue)
-        {
-            if (cue.clips.Count == 0) return true;
-            foreach (AudioClip clip in cue.clips)
-            {
-                if (clip == null) return true;
-            }
-            return false;
-        }
-
-        // ---------------------------------------------------------------- drag & drop
-
-        private void DrawDropArea()
-        {
-            if (dropStyle == null)
-            {
-                dropStyle = new GUIStyle(EditorStyles.helpBox) { alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Italic };
-            }
-            Rect rect = GUILayoutUtility.GetRect(0f, 34f, GUILayout.ExpandWidth(true));
-            GUI.Box(rect, "Drop AudioClips or folders here to create cues", dropStyle);
             bool group = EditorPrefs.GetBool(GroupPrefKey, true);
-            bool newGroup = EditorGUILayout.ToggleLeft("Group numbered variations (step_01, step_02 = one cue \"step\")", group);
+            bool newGroup = EditorGUILayout.ToggleLeft(new GUIContent("Combine numbered SFX into one cue (hit_01, hit_02 → hit)",
+                "Each file becomes a random variation of the same cue."), group, EditorStyles.miniLabel);
             if (newGroup != group) EditorPrefs.SetBool(GroupPrefKey, newGroup);
+        }
 
+        private void DropZone(Rect rect, string label, bool music)
+        {
             Event e = Event.current;
+            bool hover = (e.type == EventType.DragUpdated || e.type == EventType.DragPerform || e.type == EventType.Repaint)
+                         && DragAndDrop.objectReferences.Length > 0 && rect.Contains(e.mousePosition);
+            Color old = GUI.backgroundColor;
+            if (hover) GUI.backgroundColor = new Color(0.6f, 0.85f, 1f);
+            GUI.Box(rect, label, dropStyle);
+            GUI.backgroundColor = old;
+
             if ((e.type != EventType.DragUpdated && e.type != EventType.DragPerform) || !rect.Contains(e.mousePosition)) return;
             List<AudioClip> clips = CollectClips(DragAndDrop.objectReferences);
             if (clips.Count == 0) return;
@@ -185,7 +227,8 @@ namespace kinatraa.AudioSystem.Editor
             if (e.type == EventType.DragPerform)
             {
                 DragAndDrop.AcceptDrag();
-                pending = () => AddClips(clips, newGroup);
+                bool group = EditorPrefs.GetBool(GroupPrefKey, true);
+                pending = () => AddClips(clips, music, group);
             }
             e.Use();
         }
@@ -213,172 +256,196 @@ namespace kinatraa.AudioSystem.Editor
             return result;
         }
 
-        private void AddClips(List<AudioClip> clips, bool groupVariations)
+        /// <summary>
+        /// Creates cues from clips. SFX: snake_case id, numbered files optionally combined. Music: one looping 2D cue per
+        /// file on the Music channel. Clips whose cue already exists are added to it.
+        /// </summary>
+        private void AddClips(List<AudioClip> clips, bool music, bool groupVariations)
         {
-            Mutate("Add Audio Cues", lib =>
+            Mutate(music ? "Add Music Cues" : "Add SFX Cues", lib =>
             {
+                int first = -1;
                 foreach (AudioClip clip in clips)
                 {
-                    string baseName = groupVariations ? AudioEditorUtility.StripVariationSuffix(clip.name) : clip.name;
+                    string baseName = !music && groupVariations ? AudioEditorUtility.StripVariationSuffix(clip.name) : clip.name;
                     string id = AudioEditorUtility.ToSnakeCase(baseName);
                     if (id.Length == 0) id = "cue";
                     AudioCue cue = lib.FindCue(id);
                     if (cue == null)
                     {
                         cue = new AudioCue { id = id };
+                        if (music)
+                        {
+                            cue.channel = AudioChannel.Music;
+                            cue.loop = true;
+                            cue.spatialBlend = 0f;
+                            cue.playMode = AudioClipPlayMode.First;
+                            cue.priority = 0;
+                        }
                         lib.cues.Add(cue);
                     }
                     if (!cue.clips.Contains(clip)) cue.clips.Add(clip);
+                    if (first < 0) first = lib.cues.IndexOf(cue);
                 }
+                return first;
             });
+            search = "";
+            channelFilter = AllChannels;
         }
 
-        // ---------------------------------------------------------------- bulk edit
+        // ---------------------------------------------------------------- list
 
-        private void DrawBulkBar()
+        private bool Matches(AudioCue cue)
         {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Bulk edit: " + selected.Count + " selected", EditorStyles.boldLabel);
-
-            EditorGUILayout.BeginHorizontal();
-            string[] names = AudioEditorUtility.ChannelNames;
-            int ci = EditorGUILayout.Popup("Channel", Mathf.Max(0, Array.IndexOf(names, bulkChannel)), names);
-            bulkChannel = names[ci];
-            if (GUILayout.Button("Apply", GUILayout.Width(60f)))
+            if (cue == null) return false;
+            if (channelFilter != AllChannels && cue.channel.Name != channelFilter) return false;
+            if (string.IsNullOrEmpty(search)) return true;
+            if (cue.id != null && cue.id.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            foreach (string tag in cue.tags)
             {
-                ForSelected(p => p.FindPropertyRelative("channel").FindPropertyRelative("name").stringValue = bulkChannel);
+                if (tag != null && tag.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0) return true;
             }
-            EditorGUILayout.EndHorizontal();
-
-            EditorGUILayout.BeginHorizontal();
-            bulkVolume = AudioCueGUI.MinMax("Volume", bulkVolume, 0f, 1f);
-            if (GUILayout.Button("Apply", GUILayout.Width(60f))) ForSelected(p => p.FindPropertyRelative("volumeRange").vector2Value = bulkVolume);
-            EditorGUILayout.EndHorizontal();
-
-            EditorGUILayout.BeginHorizontal();
-            bulkPitch = AudioCueGUI.MinMax("Pitch", bulkPitch, 0.1f, 3f);
-            if (GUILayout.Button("Apply", GUILayout.Width(60f))) ForSelected(p => p.FindPropertyRelative("pitchRange").vector2Value = bulkPitch);
-            EditorGUILayout.EndHorizontal();
-
-            EditorGUILayout.BeginHorizontal();
-            bulkTag = EditorGUILayout.TextField("Tag", bulkTag);
-            GUI.enabled = !string.IsNullOrEmpty(bulkTag);
-            if (GUILayout.Button("Add", GUILayout.Width(40f))) ForSelected(p => SetTag(p.FindPropertyRelative("tags"), bulkTag, true));
-            if (GUILayout.Button("Remove", GUILayout.Width(56f))) ForSelected(p => SetTag(p.FindPropertyRelative("tags"), bulkTag, false));
-            GUI.enabled = true;
-            EditorGUILayout.EndHorizontal();
-
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("Select All Visible")) selected.UnionWith(visible);
-            if (GUILayout.Button("Clear Selection")) selected.Clear();
-            if (GUILayout.Button("Delete Selected"))
-            {
-                var indices = new List<int>(selected);
-                indices.Sort();
-                pending = () => Mutate("Delete Audio Cues", l =>
-                {
-                    for (int i = indices.Count - 1; i >= 0; i--)
-                    {
-                        if (indices[i] < l.cues.Count) l.cues.RemoveAt(indices[i]);
-                    }
-                });
-            }
-            EditorGUILayout.EndHorizontal();
-            EditorGUILayout.EndVertical();
+            return false;
         }
 
-        private void ForSelected(Action<SerializedProperty> apply)
+        private int CountVisible(AudioLibrary lib)
         {
-            foreach (int i in selected)
+            int n = 0;
+            foreach (AudioCue cue in lib.cues)
             {
-                if (i < cuesProp.arraySize) apply(cuesProp.GetArrayElementAtIndex(i));
+                if (Matches(cue)) n++;
             }
+            return n;
         }
 
-        private static void SetTag(SerializedProperty tags, string tag, bool add)
+        private void DrawList(AudioLibrary lib)
         {
-            for (int i = 0; i < tags.arraySize; i++)
+            int shown = 0;
+            for (int i = 0; i < lib.cues.Count; i++)
             {
-                if (tags.GetArrayElementAtIndex(i).stringValue != tag) continue;
-                if (!add) tags.DeleteArrayElementAtIndex(i);
-                return;
+                if (!Matches(lib.cues[i])) continue;
+                DrawRow(lib, i);
+                shown++;
             }
-            if (!add) return;
-            tags.arraySize++;
-            tags.GetArrayElementAtIndex(tags.arraySize - 1).stringValue = tag;
+            if (lib.cues.Count == 0) EditorGUILayout.LabelField("No cues yet. Drop clips on the zones above.", EditorStyles.centeredGreyMiniLabel);
+            else if (shown == 0) EditorGUILayout.LabelField("No cue matches the filter.", EditorStyles.centeredGreyMiniLabel);
         }
 
-        // ---------------------------------------------------------------- cue rows
-
-        private void DrawCue(AudioLibrary lib, int index, Dictionary<string, int> localCounts)
+        private void DrawRow(AudioLibrary lib, int index)
         {
             AudioCue cue = lib.cues[index];
-            SerializedProperty prop = cuesProp.GetArrayElementAtIndex(index);
-            string id = cue != null ? cue.id ?? "" : "";
-            int count;
-            bool duplicate = id.Length == 0 || (localCounts.TryGetValue(id, out count) && count > 1);
-            string otherLibrary = OtherLibraryWithId(lib, id);
+            Rect row = GUILayoutUtility.GetRect(10f, RowHeight, GUILayout.ExpandWidth(true));
+            Event e = Event.current;
+            if (e.type == EventType.Repaint && index == selected) EditorGUI.DrawRect(row, SelectedColor);
 
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            var play = new Rect(row.x + 2f, row.y + 1f, 24f, RowHeight - 2f);
+            var channel = new Rect(row.xMax - 66f, row.y, 62f, RowHeight);
+            var warn = new Rect(channel.x - 18f, row.y + 2f, 16f, 16f);
+            var label = new Rect(play.xMax + 6f, row.y, warn.x - play.xMax - 8f, RowHeight);
+
+            bool playing = AudioEditorUtility.IsPreviewing(cue);
+            if (GUI.Button(play, playing ? stopIcon : playIcon, EditorStyles.miniButton))
+            {
+                if (playing) AudioEditorUtility.StopPreview();
+                else AudioEditorUtility.Preview(cue);
+            }
+            GUI.Label(label, string.IsNullOrEmpty(cue.id) ? "<no id>" : cue.id, IsBadId(cue.id) ? errorLabel : EditorStyles.label);
+            if (HasMissingClips(cue)) GUI.Label(warn, warnIcon);
+            GUI.Label(channel, cue.channel.Name, channelLabel);
+
+            if (!row.Contains(e.mousePosition) || play.Contains(e.mousePosition)) return;
+            if (e.type == EventType.MouseDown && e.button == 0)
+            {
+                Select(index);
+                e.Use();
+            }
+            else if (e.type == EventType.ContextClick || (e.type == EventType.MouseDown && e.button == 1))
+            {
+                Select(index);
+                ShowRowMenu(lib, index);
+                e.Use();
+            }
+        }
+
+        private void ShowRowMenu(AudioLibrary lib, int index)
+        {
+            var menu = new GenericMenu();
+            menu.AddItem(new GUIContent("Duplicate"), false, () => Duplicate(index));
+            menu.AddItem(new GUIContent("Delete"), false, () => Delete(index));
+            menu.AddSeparator("");
+            if (index > 0) menu.AddItem(new GUIContent("Move Up"), false, () => Move(index, index - 1));
+            else menu.AddDisabledItem(new GUIContent("Move Up"));
+            if (index < lib.cues.Count - 1) menu.AddItem(new GUIContent("Move Down"), false, () => Move(index, index + 1));
+            else menu.AddDisabledItem(new GUIContent("Move Down"));
+            menu.ShowAsContext();
+        }
+
+        private void Select(int index)
+        {
+            selected = index;
+            GUI.FocusControl(null);
+            Repaint();
+        }
+
+        private static bool HasMissingClips(AudioCue cue)
+        {
+            if (cue.clips.Count == 0) return true;
+            foreach (AudioClip clip in cue.clips)
+            {
+                if (clip == null) return true;
+            }
+            return false;
+        }
+
+        // ---------------------------------------------------------------- detail
+
+        private void DrawDetail(AudioLibrary lib)
+        {
+            EditorGUILayout.Space();
+            if (selected < 0 || selected >= lib.cues.Count || lib.cues[selected] == null)
+            {
+                EditorGUILayout.HelpBox(lib.cues.Count == 0 ? "Drop clips above to create your first cue." : "Select a cue to edit it.", MessageType.Info);
+                return;
+            }
+
+            AudioCue cue = lib.cues[selected];
             EditorGUILayout.BeginHorizontal();
-
-            bool isSelected = selected.Contains(index);
-            if (EditorGUILayout.Toggle(isSelected, GUILayout.Width(16f)) != isSelected)
-            {
-                if (isSelected) selected.Remove(index);
-                else selected.Add(index);
-            }
-
-            Color oldColor = GUI.color;
-            if (duplicate) GUI.color = DuplicateColor;
-            prop.isExpanded = EditorGUILayout.Foldout(prop.isExpanded, id.Length > 0 ? id : "<empty id>", true);
-            GUI.color = oldColor;
-
-            if (cue != null)
-            {
-                GUILayout.Label(cue.channel.Name, EditorStyles.miniLabel, GUILayout.Width(60f));
-                GUIContent clipsLabel = HasMissingClips(cue)
-                    ? new GUIContent(cue.clips.Count + " clip(s) (!)", "No clips or a missing clip")
-                    : new GUIContent(cue.clips.Count + " clip(s)");
-                GUILayout.Label(clipsLabel, EditorStyles.miniLabel, GUILayout.Width(70f));
-
-                bool playing = AudioEditorUtility.IsPreviewing(cue);
-                if (GUILayout.Button(playing ? "Stop" : "Play", EditorStyles.miniButton, GUILayout.Width(40f)))
-                {
-                    if (playing) AudioEditorUtility.StopPreview();
-                    else AudioEditorUtility.Preview(cue);
-                }
-            }
-
-            GUI.enabled = index > 0;
-            if (GUILayout.Button(new GUIContent("↑", "Move up"), EditorStyles.miniButtonLeft, GUILayout.Width(22f))) Move(index, index - 1);
-            GUI.enabled = index < lib.cues.Count - 1;
-            if (GUILayout.Button(new GUIContent("↓", "Move down"), EditorStyles.miniButtonMid, GUILayout.Width(22f))) Move(index, index + 1);
-            GUI.enabled = true;
-            if (GUILayout.Button(new GUIContent("Dup", "Duplicate"), EditorStyles.miniButtonMid, GUILayout.Width(34f)))
-            {
-                pending = () => Mutate("Duplicate Audio Cue", l =>
-                {
-                    AudioCue copy = JsonUtility.FromJson<AudioCue>(JsonUtility.ToJson(l.cues[index]));
-                    copy.id = UniqueId(l, copy.id);
-                    l.cues.Insert(index + 1, copy);
-                });
-            }
-            if (GUILayout.Button(new GUIContent("×", "Delete"), EditorStyles.miniButtonRight, GUILayout.Width(22f)))
-            {
-                pending = () => Mutate("Delete Audio Cue", l => l.cues.RemoveAt(index));
-            }
+            EditorGUILayout.LabelField(string.IsNullOrEmpty(cue.id) ? "<no id>" : cue.id, EditorStyles.boldLabel);
+            int index = selected;
+            if (GUILayout.Button("Duplicate", EditorStyles.miniButtonLeft, GUILayout.Width(70f))) pending = () => Duplicate(index);
+            if (GUILayout.Button("Delete", EditorStyles.miniButtonRight, GUILayout.Width(55f))) pending = () => Delete(index);
             EditorGUILayout.EndHorizontal();
 
-            if (duplicate) EditorGUILayout.HelpBox(id.Length == 0 ? "Empty id: this cue cannot be played." : "Duplicate id in this library.", MessageType.Error);
-            if (otherLibrary != null) EditorGUILayout.HelpBox("Id also used in library '" + otherLibrary + "'. The library registered last wins.", MessageType.Warning);
-            if (prop.isExpanded) AudioCueGUI.Draw(prop);
-            EditorGUILayout.EndVertical();
+            if (string.IsNullOrEmpty(cue.id)) EditorGUILayout.HelpBox("Empty id: this cue cannot be played.", MessageType.Error);
+            else if (IsBadId(cue.id)) EditorGUILayout.HelpBox("Another cue in this library has the same id.", MessageType.Error);
+            string other = OtherLibraryWithId(lib, cue.id);
+            if (other != null) EditorGUILayout.HelpBox("Id also used in library '" + other + "'. The library registered last wins.", MessageType.Warning);
+
+            SerializedProperty cueProp = cuesProp.GetArrayElementAtIndex(selected);
+            if (shownInDetail != selected)
+            {
+                // Clips are the most edited field: show them expanded whenever another cue is selected.
+                cueProp.FindPropertyRelative("clips").isExpanded = true;
+                shownInDetail = selected;
+            }
+            AudioCueGUI.Draw(cueProp);
+        }
+
+        private void DrawPlaylists()
+        {
+            EditorGUILayout.Space();
+            bool open = SessionState.GetBool(PlaylistsFoldoutKey, false);
+            bool newOpen = EditorGUILayout.Foldout(open, "Playlists (" + playlistsProp.arraySize + ")", true);
+            if (newOpen != open) SessionState.SetBool(PlaylistsFoldoutKey, newOpen);
+            if (!newOpen) return;
+            EditorGUI.indentLevel++;
+            EditorGUILayout.PropertyField(playlistsProp, GUIContent.none, true);
+            EditorGUI.indentLevel--;
         }
 
         private static string OtherLibraryWithId(AudioLibrary lib, string id)
         {
-            if (id.Length == 0) return null;
+            if (string.IsNullOrEmpty(id)) return null;
             foreach (AudioEditorUtility.CueInfo info in AudioEditorUtility.Cues)
             {
                 if (info.id == id && info.library != lib) return info.library.name;
@@ -386,24 +453,53 @@ namespace kinatraa.AudioSystem.Editor
             return null;
         }
 
-        private void Move(int from, int to)
+        // ---------------------------------------------------------------- edits
+
+        private void Duplicate(int index)
         {
-            cuesProp.MoveArrayElement(from, to);
-            selected.Clear();
+            Mutate("Duplicate Audio Cue", l =>
+            {
+                AudioCue copy = JsonUtility.FromJson<AudioCue>(JsonUtility.ToJson(l.cues[index]));
+                copy.id = UniqueId(l, copy.id);
+                l.cues.Insert(index + 1, copy);
+                return index + 1;
+            });
         }
 
-        // ---------------------------------------------------------------- helpers
+        private void Delete(int index)
+        {
+            Mutate("Delete Audio Cue", l =>
+            {
+                l.cues.RemoveAt(index);
+                return Mathf.Min(index, l.cues.Count - 1);
+            });
+        }
 
-        private void Mutate(string undoName, Action<AudioLibrary> change)
+        private void Move(int from, int to)
+        {
+            Mutate("Move Audio Cue", l =>
+            {
+                AudioCue cue = l.cues[from];
+                l.cues.RemoveAt(from);
+                l.cues.Insert(to, cue);
+                return to;
+            });
+        }
+
+        /// <summary>Applies a change with undo; the change returns the index to select (-1 keeps the current cue).</summary>
+        private void Mutate(string undoName, Func<AudioLibrary, int> change)
         {
             AudioLibrary lib = Library;
+            AudioCue current = selected >= 0 && selected < lib.cues.Count ? lib.cues[selected] : null;
             Undo.RecordObject(lib, undoName);
-            change(lib);
+            int select = change(lib);
+            selected = select >= 0 ? select : lib.cues.IndexOf(current);
             EditorUtility.SetDirty(lib);
             serializedObject.Update();
-            selected.Clear();
+            GUI.FocusControl(null);
             AudioEditorUtility.Invalidate();
             Audio.NotifyLibraryChanged(lib);
+            Repaint();
         }
 
         private static string UniqueId(AudioLibrary lib, string id)
@@ -415,12 +511,11 @@ namespace kinatraa.AudioSystem.Editor
         }
     }
 
-    /// <summary>Layout of a single cue (the cue "inspector"), with min/max sliders and validation.</summary>
+    /// <summary>Layout of a single cue: common settings first, advanced settings in collapsed sections.</summary>
     internal static class AudioCueGUI
     {
         internal static void Draw(SerializedProperty cue)
         {
-            EditorGUI.indentLevel++;
             EditorGUILayout.DelayedTextField(cue.FindPropertyRelative("id"));
 
             SerializedProperty clips = cue.FindPropertyRelative("clips");
@@ -439,54 +534,76 @@ namespace kinatraa.AudioSystem.Editor
                 }
             }
 
-            EditorGUILayout.PropertyField(cue.FindPropertyRelative("playMode"));
             EditorGUILayout.PropertyField(cue.FindPropertyRelative("channel"));
+            if (clips.arraySize > 1) EditorGUILayout.PropertyField(cue.FindPropertyRelative("playMode"), new GUIContent("Pick Clip"));
             MinMax(cue.FindPropertyRelative("volumeRange"), "Volume", 0f, 1f);
             MinMax(cue.FindPropertyRelative("pitchRange"), "Pitch", 0.1f, 3f);
             EditorGUILayout.PropertyField(cue.FindPropertyRelative("loop"));
 
-            EditorGUILayout.LabelField("Spatial", EditorStyles.boldLabel);
-            SerializedProperty blend = cue.FindPropertyRelative("spatialBlend");
-            EditorGUILayout.PropertyField(blend, new GUIContent("Spatial Blend (2D-3D)"));
-            if (blend.floatValue > 0f)
+            if (Section("3D Sound"))
             {
-                SerializedProperty min = cue.FindPropertyRelative("minDistance");
-                SerializedProperty max = cue.FindPropertyRelative("maxDistance");
-                EditorGUILayout.PropertyField(min);
-                EditorGUILayout.PropertyField(max);
-                EditorGUILayout.PropertyField(cue.FindPropertyRelative("rolloff"));
-                if (min.floatValue < 0f || max.floatValue <= min.floatValue)
+                SerializedProperty blend = cue.FindPropertyRelative("spatialBlend");
+                EditorGUILayout.PropertyField(blend, new GUIContent("Spatial Blend", "0 = 2D, 1 = 3D. Only used when played at a position or on a transform."));
+                if (blend.floatValue > 0f)
                 {
-                    EditorGUILayout.HelpBox("Max distance must be greater than min distance (and both positive).", MessageType.Warning);
+                    SerializedProperty min = cue.FindPropertyRelative("minDistance");
+                    SerializedProperty max = cue.FindPropertyRelative("maxDistance");
+                    EditorGUILayout.PropertyField(min);
+                    EditorGUILayout.PropertyField(max);
+                    EditorGUILayout.PropertyField(cue.FindPropertyRelative("rolloff"));
+                    if (min.floatValue < 0f || max.floatValue <= min.floatValue)
+                    {
+                        EditorGUILayout.HelpBox("Max distance must be greater than min distance (and both positive).", MessageType.Warning);
+                    }
                 }
+                EndSection();
             }
 
-            EditorGUILayout.LabelField("Limits", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(cue.FindPropertyRelative("priority"));
-            EditorGUILayout.PropertyField(cue.FindPropertyRelative("cooldown"));
-            SerializedProperty maxInstances = cue.FindPropertyRelative("maxInstances");
-            EditorGUILayout.PropertyField(maxInstances, new GUIContent("Max Instances (0 = no limit)"));
-            if (maxInstances.intValue > 0) EditorGUILayout.PropertyField(cue.FindPropertyRelative("stealPolicy"));
-            if (maxInstances.intValue < 0) maxInstances.intValue = 0;
+            if (Section("Limits"))
+            {
+                EditorGUILayout.PropertyField(cue.FindPropertyRelative("cooldown"), new GUIContent("Cooldown (s)", "Minimum time between two plays."));
+                SerializedProperty maxInstances = cue.FindPropertyRelative("maxInstances");
+                EditorGUILayout.PropertyField(maxInstances, new GUIContent("Max Instances", "0 = no limit."));
+                if (maxInstances.intValue < 0) maxInstances.intValue = 0;
+                if (maxInstances.intValue > 0) EditorGUILayout.PropertyField(cue.FindPropertyRelative("stealPolicy"), new GUIContent("When Full"));
+                EditorGUILayout.PropertyField(cue.FindPropertyRelative("priority"));
+                EndSection();
+            }
 
-            EditorGUILayout.LabelField("Timing", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(cue.FindPropertyRelative("startDelay"));
-            EditorGUILayout.PropertyField(cue.FindPropertyRelative("fadeIn"));
-            EditorGUILayout.PropertyField(cue.FindPropertyRelative("fadeOut"));
+            if (Section("Timing"))
+            {
+                EditorGUILayout.PropertyField(cue.FindPropertyRelative("startDelay"), new GUIContent("Start Delay (s)"));
+                EditorGUILayout.PropertyField(cue.FindPropertyRelative("fadeIn"), new GUIContent("Fade In (s)"));
+                EditorGUILayout.PropertyField(cue.FindPropertyRelative("fadeOut"), new GUIContent("Fade Out (s)"));
+                EndSection();
+            }
 
-            EditorGUILayout.PropertyField(cue.FindPropertyRelative("tags"), true);
+            if (Section("Tags"))
+            {
+                EditorGUILayout.PropertyField(cue.FindPropertyRelative("tags"), GUIContent.none, true);
+                EndSection();
+            }
+        }
+
+        private static bool Section(string title)
+        {
+            string key = "kinatraa.audio.foldout." + title;
+            bool open = SessionState.GetBool(key, false);
+            bool newOpen = EditorGUILayout.Foldout(open, title, true);
+            if (newOpen != open) SessionState.SetBool(key, newOpen);
+            if (newOpen) EditorGUI.indentLevel++;
+            return newOpen;
+        }
+
+        private static void EndSection()
+        {
             EditorGUI.indentLevel--;
         }
 
         internal static void MinMax(SerializedProperty property, string label, float min, float max)
         {
+            Vector2 value = property.vector2Value;
             EditorGUI.BeginChangeCheck();
-            Vector2 value = MinMax(label, property.vector2Value, min, max);
-            if (EditorGUI.EndChangeCheck()) property.vector2Value = value;
-        }
-
-        internal static Vector2 MinMax(string label, Vector2 value, float min, float max)
-        {
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.PrefixLabel(label);
             int indent = EditorGUI.indentLevel;
@@ -497,23 +614,29 @@ namespace kinatraa.AudioSystem.Editor
             b = EditorGUILayout.FloatField(b, GUILayout.Width(44f));
             EditorGUI.indentLevel = indent;
             EditorGUILayout.EndHorizontal();
+            if (!EditorGUI.EndChangeCheck()) return;
             a = Mathf.Clamp(a, min, max);
-            b = Mathf.Clamp(b, a, max);
-            return new Vector2(a, b);
+            property.vector2Value = new Vector2(a, Mathf.Clamp(b, a, max));
         }
     }
 
-    /// <summary>Dockable window hosting the library inspector, with a library picker.</summary>
+    /// <summary>Dockable library editor with a library picker and first-run setup.</summary>
     internal sealed class AudioLibraryWindow : EditorWindow
     {
         [SerializeField] private AudioLibrary library;
-        private UnityEditor.Editor editor;
-        private Vector2 scroll;
+        private AudioLibraryEditor editor;
 
         [MenuItem(AudioEditorUtility.MenuRoot + "Library Window", false, 0)]
         internal static void Open()
         {
             GetWindow<AudioLibraryWindow>("Audio Library").Show();
+        }
+
+        internal static void Open(AudioLibrary lib)
+        {
+            AudioLibraryWindow window = GetWindow<AudioLibraryWindow>("Audio Library");
+            window.library = lib;
+            window.Show();
         }
 
         private void OnSelectionChange()
@@ -531,10 +654,12 @@ namespace kinatraa.AudioSystem.Editor
 
         private void OnGUI()
         {
+            List<AudioLibrary> all = AudioEditorUtility.Libraries;
+            if (library == null && all.Count > 0) library = all[0];
+
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
             library = (AudioLibrary)EditorGUILayout.ObjectField(library, typeof(AudioLibrary), false, GUILayout.MinWidth(160f));
-            List<AudioLibrary> all = AudioEditorUtility.Libraries;
-            if (GUILayout.Button("Pick", EditorStyles.toolbarDropDown, GUILayout.Width(50f)))
+            if (GUILayout.Button("Libraries", EditorStyles.toolbarDropDown, GUILayout.Width(70f)))
             {
                 var menu = new GenericMenu();
                 foreach (AudioLibrary lib in all)
@@ -542,37 +667,51 @@ namespace kinatraa.AudioSystem.Editor
                     AudioLibrary captured = lib;
                     menu.AddItem(new GUIContent(lib.name), lib == library, () => library = captured);
                 }
-                if (all.Count == 0) menu.AddDisabledItem(new GUIContent("No libraries in project"));
+                if (all.Count > 0) menu.AddSeparator("");
+                menu.AddItem(new GUIContent("New Library..."), false, NewLibrary);
                 menu.ShowAsContext();
             }
-            if (GUILayout.Button("New", EditorStyles.toolbarButton, GUILayout.Width(40f)))
-            {
-                string path = EditorUtility.SaveFilePanelInProject("New Audio Library", "AudioLibrary", "asset", "Create a new audio library");
-                if (!string.IsNullOrEmpty(path))
-                {
-                    library = CreateInstance<AudioLibrary>();
-                    AssetDatabase.CreateAsset(library, path);
-                    AssetDatabase.SaveAssets();
-                    AudioEditorUtility.Invalidate();
-                }
-            }
             GUILayout.FlexibleSpace();
+            if (GUILayout.Button("Config", EditorStyles.toolbarButton, GUILayout.Width(50f)))
+            {
+                AudioSystemConfig config = AudioEditorUtility.FindConfig();
+                if (config != null) Selection.activeObject = config;
+            }
             EditorGUILayout.EndHorizontal();
 
-            if (library == null && all.Count > 0) library = all[0];
             if (library == null)
             {
-                EditorGUILayout.HelpBox("No audio library. Click New, or use " + AudioEditorUtility.MenuRoot + "Create Default Config.", MessageType.Info);
+                DrawSetup();
                 return;
             }
             if (editor == null || editor.target != library)
             {
                 if (editor != null) DestroyImmediate(editor);
-                editor = UnityEditor.Editor.CreateEditor(library);
+                editor = (AudioLibraryEditor)UnityEditor.Editor.CreateEditor(library, typeof(AudioLibraryEditor));
             }
-            scroll = EditorGUILayout.BeginScrollView(scroll);
-            editor.OnInspectorGUI();
-            EditorGUILayout.EndScrollView();
+            editor.DrawLayout(true);
+        }
+
+        private void DrawSetup()
+        {
+            EditorGUILayout.Space();
+            if (AudioEditorUtility.FindConfig() == null)
+            {
+                EditorGUILayout.HelpBox("Audio is not set up in this project yet. This creates Assets/Resources/kinatraaAudioConfig " +
+                    "(loaded automatically at startup) and an empty library at Assets/Audio/AudioLibrary.", MessageType.Info);
+                if (GUILayout.Button("Create Audio Setup", GUILayout.Height(30f))) library = AudioSetup.CreateDefaultSetup();
+            }
+            else
+            {
+                EditorGUILayout.HelpBox("There is no audio library yet.", MessageType.Info);
+                if (GUILayout.Button("Create Library", GUILayout.Height(30f))) library = AudioSetup.CreateLibrary("Assets/Audio/AudioLibrary.asset");
+            }
+        }
+
+        private void NewLibrary()
+        {
+            string path = EditorUtility.SaveFilePanelInProject("New Audio Library", "AudioLibrary", "asset", "Create an audio library");
+            if (!string.IsNullOrEmpty(path)) library = AudioSetup.CreateLibrary(path);
         }
     }
 }

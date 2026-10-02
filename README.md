@@ -17,13 +17,13 @@ It uses only Unity's built-in audio module. There are no third-party, Addressabl
 **Package Manager (git URL)**: *Window ▸ Package Manager ▸ + ▸ Add package from git URL…*
 
 ```
-https://github.com/kinatraa/com.kinatraa.audiosystem.git#1.0.0
+https://github.com/kinatraa/com.kinatraa.audiosystem.git#1.1.0
 ```
 
 or add it to `Packages/manifest.json`:
 
 ```json
-"com.kinatraa.audiosystem": "https://github.com/kinatraa/com.kinatraa.audiosystem.git#1.0.0"
+"com.kinatraa.audiosystem": "https://github.com/kinatraa/com.kinatraa.audiosystem.git#1.1.0"
 ```
 
 **Git submodule** (embedded, editable):
@@ -34,8 +34,8 @@ git submodule add https://github.com/kinatraa/com.kinatraa.audiosystem.git Packa
 
 ## 60-second quick start
 
-1. **Tools ▸ kinatraa ▸ Audio ▸ Create Default Config.** This creates `Assets/Resources/kinatraaAudioConfig.asset` and an empty `Assets/Audio/AudioLibrary.asset`.
-2. Select the library and drag AudioClips (or a folder) onto the drop area. Cues are created with snake_case ids, so `UI Click.wav` becomes `ui_click`, and `step_01`/`step_02` become one cue `step`.
+1. Open **Tools ▸ kinatraa ▸ Audio ▸ Library Window** and click **Create Audio Setup**. This creates `Assets/Resources/kinatraaAudioConfig.asset` and a registered `Assets/Audio/AudioLibrary.asset`.
+2. Drag sound effects onto the **SFX** zone and music onto the **Music** zone. `UI Click.wav` becomes `ui_click`, numbered SFX like `step_01`/`step_02` become one cue `step`, and each music file becomes its own looping Music cue.
 3. Play sounds from code. The system starts itself before the first scene loads.
 
 ```csharp
@@ -94,10 +94,10 @@ mySettings.volumes = Audio.GetAllVolumes();
 
 All tools are under **Tools ▸ kinatraa ▸ Audio** and **Assets ▸ Create ▸ kinatraa ▸ Audio**:
 
-- **Library Window** and library inspector: search, filter by channel or tag, drag-and-drop cue creation, bulk edit, preview, duplicate-id and missing-clip warnings, sorting and reordering.
+- **Library Window** and library inspector: cue list with search, channel filter and preview, a detail panel for the selected cue, SFX/Music drop zones, duplicate-id and missing-clip warnings, and a right-click menu to duplicate, delete or move cues.
 - **Runtime Debugger** (play mode): active voices, pool usage, channel sliders and mute toggles, ducking and music state.
 - **Generate Audio Ids**: deterministic `AudioIds.cs`. The output path, class name and namespace are set in the config.
-- **Create Default Config** and **Validate Setup**.
+- **Create Default Config** (also offered by the Library window) and **Validate Setup**.
 - `[AudioCueId]`: put it on any `string` field to get a searchable id dropdown.
 
 ## Notes
@@ -108,7 +108,7 @@ All tools are under **Tools ▸ kinatraa ▸ Audio** and **Assets ▸ Create ▸
 
 ## Supported Unity versions
 
-The minimum is **2019.4 LTS**. The code targets C# 7.3 with no `UnityEngine.Pool`, and version-specific APIs are behind `#if UNITY_2023_1_OR_NEWER`. Version 1.0.0 was tested on Unity 6000.3 (6.3): editor, play mode and a macOS Mono player. The runtime and editor sources also compile at C# 7.3, which is the 2019.4 language level. Earlier editors (2019.4, 2021.3, 2022.3) have not been run yet; please report any issue.
+The minimum is **2019.4 LTS**. The code targets C# 7.3 with no `UnityEngine.Pool`, and version-specific APIs are behind `#if UNITY_2023_1_OR_NEWER`. Version 1.1.0 was tested on Unity 6000.3 (6.3): editor, play mode and a macOS Mono player. The runtime and editor sources also compile at C# 7.3, which is the 2019.4 language level. Earlier editors (2019.4, 2021.3, 2022.3) have not been run yet; please report any issue.
 
 ## Roadmap
 

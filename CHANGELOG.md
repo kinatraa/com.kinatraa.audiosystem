@@ -4,6 +4,18 @@ All notable changes to this package are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-10-02
+
+### Changed
+- The library editor is now a compact cue list plus a detail panel for the selected cue. Advanced settings (3D Sound, Limits, Timing, Tags) are in collapsed sections, and **Pick Clip** (play mode) is shown only for cues with several clips.
+- Separate SFX and Music drop zones. Music files become one looping 2D Music cue each, and numbered music files are never combined.
+- Duplicate, delete and move moved to a right-click menu; Sort, Generate Ids, Validate and Select Config moved to a **More** menu; search also matches tags.
+- The Library window offers **Create Audio Setup** when nothing exists yet, and new libraries are registered in the config automatically.
+- Unregistered libraries show a warning with a **Register in Config** button.
+
+### Removed
+- Multi-select bulk editing and the tag filter dropdown in the library editor.
+
 ## [1.0.0] - 2026-10-02
 
 ### Added
@@ -18,4 +30,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Editor: library inspector and window, cue inspector with min/max sliders, channel and `[AudioCueId]` drawers, `AudioIds.cs` generator, runtime debugger, Create Default Config and Validate Setup.
 - Basic Usage sample, plus Getting Started, Settings Integration and API documentation.
 
+[1.1.0]: https://github.com/kinatraa/com.kinatraa.audiosystem/releases/tag/1.1.0
 [1.0.0]: https://github.com/kinatraa/com.kinatraa.audiosystem/releases/tag/1.0.0

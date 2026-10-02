@@ -1,6 +1,6 @@
 {
   "name": "com.kinatraa.audiosystem",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "displayName": "kinatraa Audio System",
   "description": "Dependency-free audio system: cue libraries, pooled AudioSources, music crossfades and playlists, channel volumes with optional AudioMixer, ducking, pluggable settings/save hooks, and editor tooling (library window, id picker, constants generator, runtime debugger).",
   "unity": "2019.4",

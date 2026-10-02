@@ -11,6 +11,6 @@ These scripts need no scene. Each one draws a small IMGUI panel, so they work wi
 
 ## Try it
 
-1. Run **Tools ▸ kinatraa ▸ Audio ▸ Create Default Config** and drop a few clips into the library.
+1. Open **Tools ▸ kinatraa ▸ Audio ▸ Library Window**, click **Create Audio Setup**, and drop a few clips on the SFX and Music zones.
 2. Add the scripts to any GameObject in a scene that has an AudioListener (for example the Main Camera).
 3. Pick cue ids in the inspector (the `[AudioCueId]` dropdown), add a playlist to the library if you want to try `MusicExample`, then enter Play Mode.
