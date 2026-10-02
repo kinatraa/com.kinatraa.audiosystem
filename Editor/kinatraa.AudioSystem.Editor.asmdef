@@ -1,0 +1,18 @@
+{
+    "name": "kinatraa.AudioSystem.Editor",
+    "rootNamespace": "kinatraa.AudioSystem.Editor",
+    "references": [
+        "kinatraa.AudioSystem"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

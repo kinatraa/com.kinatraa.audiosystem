@@ -1,0 +1,34 @@
+{
+  "name": "com.kinatraa.audiosystem",
+  "version": "1.0.0",
+  "displayName": "kinatraa Audio System",
+  "description": "Dependency-free audio system: cue libraries, pooled AudioSources, music crossfades and playlists, channel volumes with optional AudioMixer, ducking, pluggable settings/save hooks, and editor tooling (library window, id picker, constants generator, runtime debugger).",
+  "unity": "2019.4",
+  "documentationUrl": "https://github.com/kinatraa/com.kinatraa.audiosystem/blob/main/Documentation~/GettingStarted.md",
+  "changelogUrl": "https://github.com/kinatraa/com.kinatraa.audiosystem/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/kinatraa/com.kinatraa.audiosystem/blob/main/LICENSE",
+  "license": "MIT",
+  "author": {
+    "name": "kinatraa",
+    "url": "https://github.com/kinatraa"
+  },
+  "keywords": [
+    "audio",
+    "sound",
+    "music",
+    "sfx",
+    "audio-manager",
+    "mixer",
+    "pool"
+  ],
+  "dependencies": {
+    "com.unity.modules.audio": "1.0.0"
+  },
+  "samples": [
+    {
+      "displayName": "Basic Usage",
+      "description": "Scripts showing SFX, music crossfade, volume sliders and a custom settings store.",
+      "path": "Samples~/BasicUsage"
+    }
+  ]
+}
